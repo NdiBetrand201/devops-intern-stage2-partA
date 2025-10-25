@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  app_blue:
+    image: ${BLUE_IMAGE}
+    environment:
+      - RELEASE_ID=${RELEASE_ID_BLUE}
+    ports:
+      - "8081:80"  # Expose for direct chaos: localhost:8081
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  app_green:
+    image: ${GREEN_IMAGE}
+    environment:
+      - RELEASE_ID=${RELEASE_ID_GREEN}
+    ports:
+      - "8082:80"  # Expose for direct chaos: localhost:8082
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "${PORT:-8080}:80"  # Public entrypoint: localhost:8080
+    volumes:
+      - ./start.sh:/start.sh:ro  # Mount the script
+    environment:
+      - ACTIVE_POOL=${ACTIVE_POOL}
+    command: ["/start.sh"]
+    depends_on:
+      app_blue:
+        condition: service_healthy
+      app_green:
+        condition: service_healthy
