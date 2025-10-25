@@ -1,14 +1,12 @@
-version: '3.8'
-
 services:
   app_blue:
     image: ${BLUE_IMAGE}
     environment:
       - RELEASE_ID=${RELEASE_ID_BLUE}
     ports:
-      - "8081:80"  # Expose for direct chaos: localhost:8081
+      - "8081:3000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/healthz"]
+      test: ["CMD", "wget", "--no-verbose", "--spider", "http://localhost:3000/healthz"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -18,9 +16,9 @@ services:
     environment:
       - RELEASE_ID=${RELEASE_ID_GREEN}
     ports:
-      - "8082:80"  # Expose for direct chaos: localhost:8082
+      - "8082:3000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/healthz"]
+      test: ["CMD", "wget", "--no-verbose", "--spider", "http://localhost:3000/healthz"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -28,9 +26,9 @@ services:
   nginx:
     image: nginx:alpine
     ports:
-      - "${PORT:-8080}:80"  # Public entrypoint: localhost:8080
+      - "${PORT:-8080}:80"
     volumes:
-      - ./start.sh:/start.sh:ro  # Mount the script
+      - ./start.sh:/start.sh:ro
     environment:
       - ACTIVE_POOL=${ACTIVE_POOL}
     command: ["/start.sh"]
