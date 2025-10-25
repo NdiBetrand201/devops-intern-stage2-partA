@@ -1,0 +1,99 @@
+user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    # Logging format
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" upstream: $upstream_addr';
+
+    access_log /var/log/nginx/access.log main;
+
+    sendfile on;
+    keepalive_timeout 65;
+
+    # Upstream backend servers
+    upstream backend {
+        # Primary server (Blue by default)
+        server app_blue:3000 max_fails=1 fail_timeout=10s;
+        
+        # Backup server (Green) - only used when Blue fails
+        server app_green:3000 backup;
+        
+        # Keep connections alive for performance
+        keepalive 32;
+    }
+
+    server {
+        listen 80;
+        server_name localhost;
+
+        # Main application endpoint
+        location / {
+            # Forward to backend upstream
+            proxy_pass http://backend;
+            
+            # ==== CRITICAL TIMEOUTS FOR FAST FAILOVER ====
+            # Connection timeout - how long to wait for connection
+            proxy_connect_timeout 2s;
+            
+            # Send timeout - how long to wait when sending request
+            proxy_send_timeout 2s;
+            
+            # Read timeout - how long to wait for response
+            # THIS IS KEY - detects hung servers quickly
+            proxy_read_timeout 2s;
+            
+            # ==== RETRY LOGIC - THE MAGIC SAUCE ====
+            # When to try next server (Green)
+            # error = connection failed
+            # timeout = request timed out
+            # http_500/502/503/504 = server errors
+            proxy_next_upstream error timeout http_500 http_502 http_503 http_504;
+            
+            # Maximum number of retry attempts
+            proxy_next_upstream_tries 2;
+            
+            # Total time for all retry attempts
+            proxy_next_upstream_timeout 5s;
+            
+            # ==== HEADER FORWARDING ====
+            # Forward client request headers
+            proxy_pass_request_headers on;
+            
+            # Set standard proxy headers
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            
+            # ==== CRITICAL: PASS APP HEADERS TO CLIENT ====
+            # These headers MUST reach the client for tests to pass
+            proxy_pass_header X-App-Pool;
+            proxy_pass_header X-Release-Id;
+            
+            # Don't buffer - respond immediately
+            proxy_buffering off;
+            
+            # HTTP version for upstream
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+        }
+        
+        # Health check endpoint (optional but useful)
+        location /nginx-health {
+            access_log off;
+            return 200 "healthy\n";
+            add_header Content-Type text/plain;
+        }
+    }
+}

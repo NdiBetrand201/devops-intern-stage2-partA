@@ -1,39 +1,112 @@
+version: '3.8'
+
 services:
+  # ============================================
+  # BLUE APPLICATION (Primary)
+  # ============================================
   app_blue:
     image: ${BLUE_IMAGE}
+    container_name: app_blue
+    
+    # Environment variables passed to the container
     environment:
+      - APP_POOL=blue
       - RELEASE_ID=${RELEASE_ID_BLUE}
+      - PORT=${PORT:-3000}
+    
+    # Port mapping: Host:Container
+    # Expose on 8081 so grader can trigger chaos
     ports:
-      - "8081:3000"
+      - "8081:${PORT:-3000}"
+    
+    # Connect to app network
+    networks:
+      - app_network
+    
+    # Health check - Docker checks if container is healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--spider", "http://localhost:3000/healthz"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:${PORT:-3000}/healthz"]
+      interval: 5s
+      timeout: 3s
       retries: 3
+      start_period: 10s
+    
+    # Restart policy
+    restart: unless-stopped
 
+  # ============================================
+  # GREEN APPLICATION (Backup)
+  # ============================================
   app_green:
     image: ${GREEN_IMAGE}
+    container_name: app_green
+    
+    # Environment variables passed to the container
     environment:
+      - APP_POOL=green
       - RELEASE_ID=${RELEASE_ID_GREEN}
+      - PORT=${PORT:-3000}
+    
+    # Port mapping: Host:Container
+    # Expose on 8082 so grader can trigger chaos
     ports:
-      - "8082:3000"
+      - "8082:${PORT:-3000}"
+    
+    # Connect to app network
+    networks:
+      - app_network
+    
+    # Health check
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--spider", "http://localhost:3000/healthz"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:${PORT:-3000}/healthz"]
+      interval: 5s
+      timeout: 3s
       retries: 3
+      start_period: 10s
+    
+    # Restart policy
+    restart: unless-stopped
 
+  # ============================================
+  # NGINX REVERSE PROXY
+  # ============================================
   nginx:
     image: nginx:alpine
+    container_name: nginx_proxy
+    
+    # Main public port - clients access this
     ports:
-      - "${PORT:-8080}:80"
+      - "8080:80"
+    
+    # Mount nginx config template
     volumes:
-      - ./start.sh:/start.sh:ro
+      - ./nginx.conf.template:/etc/nginx/nginx.conf.template:ro
+    
+    # Environment variables for templating
     environment:
       - ACTIVE_POOL=${ACTIVE_POOL}
-    command: ["/start.sh"]
+    
+    # Command to template config and start nginx
+    # This replaces variables in template with actual values
+    command: >
+      /bin/sh -c "cp /etc/nginx/nginx.conf.template /etc/nginx/nginx.conf
+      && nginx -g 'daemon off;'"
+    
+    # Connect to app network
+    networks:
+      - app_network
+    
+    # Start nginx after apps are ready
     depends_on:
-      app_blue:
-        condition: service_healthy
-      app_green:
-        condition: service_healthy
+      - app_blue
+      - app_green
+    
+    # Restart policy
+    restart: unless-stopped
+
+# ============================================
+# NETWORK CONFIGURATION
+# ============================================
+networks:
+  app_network:
+    driver: bridge
