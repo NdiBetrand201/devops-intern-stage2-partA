@@ -7,31 +7,20 @@ services:
   app_blue:
     image: ${BLUE_IMAGE}
     container_name: app_blue
-    
-    # Environment variables passed to the container
     environment:
       - APP_POOL=blue
-      - RELEASE_ID=${RELEASE_ID_BLUE}
+      - RELEASE_ID=${RELEASE_ID_BLUE:-unknown}
       - PORT=${PORT:-3000}
-    
-    # Port mapping: Host:Container
-    # Expose on 8081 so grader can trigger chaos
     ports:
       - "8081:${PORT:-3000}"
-    
-    # Connect to app network
     networks:
       - app_network
-    
-    # Health check - Docker checks if container is healthy
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:${PORT:-3000}/healthz"]
       interval: 5s
       timeout: 3s
       retries: 3
       start_period: 10s
-    
-    # Restart policy
     restart: unless-stopped
 
   # ============================================
@@ -40,31 +29,20 @@ services:
   app_green:
     image: ${GREEN_IMAGE}
     container_name: app_green
-    
-    # Environment variables passed to the container
     environment:
       - APP_POOL=green
-      - RELEASE_ID=${RELEASE_ID_GREEN}
+      - RELEASE_ID=${RELEASE_ID_GREEN:-unknown}
       - PORT=${PORT:-3000}
-    
-    # Port mapping: Host:Container
-    # Expose on 8082 so grader can trigger chaos
     ports:
       - "8082:${PORT:-3000}"
-    
-    # Connect to app network
     networks:
       - app_network
-    
-    # Health check
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:${PORT:-3000}/healthz"]
       interval: 5s
       timeout: 3s
       retries: 3
       start_period: 10s
-    
-    # Restart policy
     restart: unless-stopped
 
   # ============================================
@@ -73,36 +51,82 @@ services:
   nginx:
     image: nginx:alpine
     container_name: nginx_proxy
-    
-    # Main public port - clients access this
     ports:
       - "8080:80"
-    
-    # Mount nginx config template
     volumes:
       - ./nginx.conf.template:/etc/nginx/nginx.conf.template:ro
-    
-    # Environment variables for templating
+      - nginx_logs:/var/log/nginx
     environment:
-      - ACTIVE_POOL=${ACTIVE_POOL}
-    
-    # Command to template config and start nginx
-    # This replaces variables in template with actual values
+      - ACTIVE_POOL=${ACTIVE_POOL:-blue}
     command: >
-      /bin/sh -c "cp /etc/nginx/nginx.conf.template /etc/nginx/nginx.conf
-      && nginx -g 'daemon off;'"
-    
-    # Connect to app network
+      /bin/sh -c "
+        mkdir -p /var/log/nginx &&
+        rm -f /var/log/nginx/access.log /var/log/nginx/error.log &&
+        touch /var/log/nginx/access.log /var/log/nginx/error.log &&
+        chown -R nginx:nginx /var/log/nginx &&
+        envsubst '$ACTIVE_POOL' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf &&
+        echo '=== NGINX CONFIG START ===' &&
+        cat /etc/nginx/nginx.conf &&
+        echo '=== NGINX CONFIG END ===' &&
+        nginx -t &&
+        exec nginx -g 'daemon off;'
+      "
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - app_network
-    
-    # Start nginx after apps are ready
     depends_on:
-      - app_blue
-      - app_green
-    
-    # Restart policy
+      app_blue:
+        condition: service_started
+      app_green:
+        condition: service_started
     restart: unless-stopped
+
+  # ============================================
+  # LOG WATCHER (Monitoring Service)
+  # ============================================
+  alert_watcher:
+    build:
+      context: .
+      dockerfile: Dockerfile.watcher
+    container_name: alert_watcher
+    volumes:
+      - nginx_logs:/var/log/nginx:ro
+    environment:
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - ERROR_RATE_THRESHOLD=${ERROR_RATE_THRESHOLD:-2.0}
+      - WINDOW_SIZE=${WINDOW_SIZE:-200}
+      - ALERT_COOLDOWN_SEC=${ALERT_COOLDOWN_SEC:-300}
+      - NGINX_LOG_PATH=/var/log/nginx/access.log
+      - MAINTENANCE_MODE=${MAINTENANCE_MODE:-false}
+      - READ_EXISTING_LOGS=${READ_EXISTING_LOGS:-true}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+    networks:
+      - app_network
+    depends_on:
+      nginx:
+        condition: service_started
+    restart: unless-stopped
+
+# ============================================
+# VOLUMES
+# ============================================
+volumes:
+  nginx_logs:
+    driver: local
 
 # ============================================
 # NETWORK CONFIGURATION

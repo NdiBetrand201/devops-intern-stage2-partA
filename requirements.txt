@@ -1,0 +1,3 @@
+
+# Version 2.31.0 is stable and secure
+requests==2.31.0
